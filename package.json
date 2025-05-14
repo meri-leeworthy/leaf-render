@@ -10,6 +10,7 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
+    "@muni-town/leaf": "0.2.0-preview.21",
     "@types/node": "^20.0.0"
   },
   "devDependencies": {
