@@ -1,98 +1,96 @@
 export interface TemplateSource {
-  name: string;
-  source: string;
-  components?: string[];
+  name: string
+  source: string
+  components?: string[]
 }
 
 export interface CompileError {
-  error_type: string;
-  message: string;
-  missing_dependencies?: string[];
+  error_type: string
+  message: string
+  missing_dependencies?: string[]
 }
 
 export type CompileResult =
   | { type: "Success" }
-  | { type: "Error"; error: CompileError };
+  | { type: "Error"; error: CompileError }
 
 export class Minijinja {
-  private wasm: WebAssembly.Instance;
-  private memory: WebAssembly.Memory;
+  private wasm: WebAssembly.Instance
+  private memory: WebAssembly.Memory
+  private heapOffset = 0
 
   constructor(wasmModule: WebAssembly.Module) {
-    this.memory = new WebAssembly.Memory({ initial: 10 });
+    this.memory = new WebAssembly.Memory({ initial: 10 })
     this.wasm = new WebAssembly.Instance(wasmModule, {
       env: {
         memory: this.memory,
       },
-    });
+    })
   }
 
-  compileTemplates(templates: TemplateSource[]): CompileResult {
-    const input = JSON.stringify(templates);
-    const inputPtr = this.allocateString(input);
-    const outputPtr = this.allocateMemory(1024);
+  private get memoryBuffer(): Uint8Array {
+    return new Uint8Array(this.memory.buffer)
+  }
 
-    try {
-      const resultSize = (this.wasm.exports.compile_templates as Function)(
-        inputPtr,
-        input.length,
-        outputPtr,
-        1024
-      );
+  private alloc(size: number): number {
+    const ptr = this.heapOffset
+    this.heapOffset += size
+    this.ensureMemory(ptr + size)
+    return ptr
+  }
 
-      const result = this.readString(outputPtr, resultSize);
-      return JSON.parse(result);
-    } finally {
-      this.freeMemory(inputPtr);
-      this.freeMemory(outputPtr);
+  private ensureMemory(byteLength: number) {
+    const pagesNeeded = Math.ceil(byteLength / 65536)
+    const currentPages = this.memory.buffer.byteLength / 65536
+    if (pagesNeeded > currentPages) {
+      this.memory.grow(pagesNeeded - currentPages)
     }
   }
 
-  renderTemplate(name: string, context: any): string {
-    const namePtr = this.allocateString(name);
-    const contextStr = JSON.stringify(context);
-    const contextPtr = this.allocateString(contextStr);
-    const outputPtr = this.allocateMemory(1024);
-
-    try {
-      const resultSize = (this.wasm.exports.render_template as Function)(
-        namePtr,
-        name.length,
-        contextPtr,
-        contextStr.length,
-        outputPtr,
-        1024
-      );
-
-      return this.readString(outputPtr, resultSize);
-    } finally {
-      this.freeMemory(namePtr);
-      this.freeMemory(contextPtr);
-      this.freeMemory(outputPtr);
-    }
-  }
-
-  private allocateString(str: string): number {
-    const encoder = new TextEncoder();
-    const bytes = encoder.encode(str);
-    const ptr = this.allocateMemory(bytes.length + 1);
-    const view = new Uint8Array(this.memory.buffer);
-    view.set(bytes, ptr);
-    view[ptr + bytes.length] = 0;
-    return ptr;
+  private writeStringToMemory(str: string): [number, number] {
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(str)
+    const ptr = this.alloc(bytes.length)
+    this.memoryBuffer.set(bytes, ptr)
+    return [ptr, bytes.length]
   }
 
   private readString(ptr: number, length: number): string {
-    const view = new Uint8Array(this.memory.buffer);
-    const bytes = view.slice(ptr, ptr + length);
-    return new TextDecoder().decode(bytes);
+    const view = this.memoryBuffer.slice(ptr, ptr + length)
+    return new TextDecoder().decode(view)
   }
 
-  private allocateMemory(size: number): number {
-    return (this.wasm.exports.malloc as Function)(size);
+  compileTemplates(templates: TemplateSource[]): CompileResult {
+    const json = JSON.stringify(templates)
+    const [inPtr, inLen] = this.writeStringToMemory(json)
+    const outPtr = this.alloc(4096)
+
+    const resultSize = (this.wasm.exports.compile_templates as Function)(
+      inPtr,
+      inLen,
+      outPtr,
+      4096
+    )
+
+    const result = this.readString(outPtr, resultSize)
+    return JSON.parse(result)
   }
 
-  private freeMemory(ptr: number): void {
-    (this.wasm.exports.free as Function)(ptr);
+  renderTemplate(name: string, context: any): string {
+    const [namePtr, nameLen] = this.writeStringToMemory(name)
+    const contextStr = JSON.stringify(context)
+    const [ctxPtr, ctxLen] = this.writeStringToMemory(contextStr)
+    const outPtr = this.alloc(4096)
+
+    const resultSize = (this.wasm.exports.render_template as Function)(
+      namePtr,
+      nameLen,
+      ctxPtr,
+      ctxLen,
+      outPtr,
+      4096
+    )
+
+    return this.readString(outPtr, resultSize)
   }
 }

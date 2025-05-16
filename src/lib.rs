@@ -1,13 +1,17 @@
-use minijinja::{Environment, Template, UndefinedBehavior};
+use minijinja::{Environment, UndefinedBehavior};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::slice;
+use std::str;
 use std::sync::Mutex;
+
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 static ENV: Lazy<Mutex<Environment<'static>>> = Lazy::new(|| Mutex::new(Environment::new()));
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct TemplateSource {
     name: String,
     source: String,
@@ -29,6 +33,14 @@ enum CompileResult {
     Error(CompileError),
 }
 
+fn write_to_memory(ptr: *mut u8, data: &[u8], max_len: usize) -> usize {
+    let len = data.len().min(max_len);
+    unsafe {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
+    }
+    len
+}
+
 #[no_mangle]
 pub extern "C" fn compile_templates(
     ptr: *const u8,
@@ -36,7 +48,7 @@ pub extern "C" fn compile_templates(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> usize {
-    let json_bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let json_bytes = unsafe { slice::from_raw_parts(ptr, len) };
     let templates: Vec<TemplateSource> = match serde_json::from_slice(json_bytes) {
         Ok(t) => t,
         Err(e) => {
@@ -47,68 +59,54 @@ pub extern "C" fn compile_templates(
             };
             let result = CompileResult::Error(error);
             let result_json = serde_json::to_string(&result).unwrap();
-            let output = result_json.as_bytes();
-            let n = output.len().min(out_len);
-            unsafe {
-                std::ptr::copy_nonoverlapping(output.as_ptr(), out_ptr, n);
-            }
-            return n;
+            return write_to_memory(out_ptr, result_json.as_bytes(), out_len);
         }
     };
 
     let mut env = ENV.lock().unwrap();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
-    for t in templates {
-        match env.add_template_owned(t.name.clone(), t.source) {
+    for t in &templates {
+        match env.add_template_owned(t.name.clone(), t.source.clone()) {
             Ok(_) => continue,
             Err(e) => {
-                let error = if e.to_string().contains("not found") {
-                    // Extract template dependencies from the error message
-                    let deps: Vec<String> = e
-                        .to_string()
-                        .split("not found")
-                        .filter_map(|s| {
-                            let s = s.trim();
-                            if s.is_empty() {
-                                None
-                            } else {
-                                Some(s.to_string())
-                            }
-                        })
-                        .collect();
-
-                    CompileError {
-                        error_type: "MissingDependency".to_string(),
-                        message: e.to_string(),
-                        missing_dependencies: Some(deps),
-                    }
+                let deps = if e.to_string().contains("not found") {
+                    Some(
+                        e.to_string()
+                            .split("not found")
+                            .filter_map(|s| {
+                                let s = s.trim();
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s.to_string())
+                                }
+                            })
+                            .collect(),
+                    )
                 } else {
-                    CompileError {
-                        error_type: "CompileError".to_string(),
-                        message: e.to_string(),
-                        missing_dependencies: None,
-                    }
+                    None
                 };
+
+                let error = CompileError {
+                    error_type: if deps.is_some() {
+                        "MissingDependency".to_string()
+                    } else {
+                        "CompileError".to_string()
+                    },
+                    message: e.to_string(),
+                    missing_dependencies: deps,
+                };
+
                 let result = CompileResult::Error(error);
                 let result_json = serde_json::to_string(&result).unwrap();
-                let output = result_json.as_bytes();
-                let n = output.len().min(out_len);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(output.as_ptr(), out_ptr, n);
-                }
-                return n;
+                return write_to_memory(out_ptr, result_json.as_bytes(), out_len);
             }
         }
     }
 
     let result = CompileResult::Success;
     let result_json = serde_json::to_string(&result).unwrap();
-    let output = result_json.as_bytes();
-    let n = output.len().min(out_len);
-    unsafe {
-        std::ptr::copy_nonoverlapping(output.as_ptr(), out_ptr, n);
-    }
-    n
+    write_to_memory(out_ptr, result_json.as_bytes(), out_len)
 }
 
 #[no_mangle]
@@ -120,13 +118,13 @@ pub extern "C" fn render_template(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> usize {
-    let name_bytes = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
-    let name = match std::str::from_utf8(name_bytes) {
+    let name_bytes = unsafe { slice::from_raw_parts(name_ptr, name_len) };
+    let name = match str::from_utf8(name_bytes) {
         Ok(n) => n,
         Err(_) => return 0,
     };
 
-    let ctx_bytes = unsafe { std::slice::from_raw_parts(ctx_ptr, ctx_len) };
+    let ctx_bytes = unsafe { slice::from_raw_parts(ctx_ptr, ctx_len) };
     let ctx: Value = match serde_json::from_slice(ctx_bytes) {
         Ok(c) => c,
         Err(_) => return 0,
@@ -143,17 +141,13 @@ pub extern "C" fn render_template(
         Err(_) => return 0,
     };
 
-    let output = rendered.as_bytes();
-    let n = output.len().min(out_len);
-    unsafe {
-        std::ptr::copy_nonoverlapping(output.as_ptr(), out_ptr, n);
-    }
-
-    n
+    write_to_memory(out_ptr, rendered.as_bytes(), out_len)
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use std::ffi::c_void;
 
@@ -185,7 +179,7 @@ mod tests {
     #[test]
     fn test_compile_templates() {
         let templates = setup_test_templates();
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             compile_templates(
                 templates.as_ptr(),
@@ -203,7 +197,7 @@ mod tests {
     #[test]
     fn test_compile_invalid_templates() {
         let invalid_json = b"invalid json";
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             compile_templates(
                 invalid_json.as_ptr(),
@@ -228,7 +222,7 @@ mod tests {
     #[test]
     fn test_compile_template_with_missing_dependency() {
         let templates = setup_template_with_dependency();
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             compile_templates(
                 templates.as_ptr(),
@@ -257,7 +251,7 @@ mod tests {
     fn test_render_template() {
         // First compile the template
         let templates = setup_test_templates();
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         unsafe {
             compile_templates(
                 templates.as_ptr(),
@@ -272,7 +266,7 @@ mod tests {
         let context = json!({"name": "World"});
         let context_bytes = serde_json::to_vec(&context).unwrap();
 
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             render_template(
                 name.as_ptr(),
@@ -292,7 +286,7 @@ mod tests {
     fn test_render_template_with_condition() {
         // First compile the template
         let templates = setup_test_templates();
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         unsafe {
             compile_templates(
                 templates.as_ptr(),
@@ -307,7 +301,7 @@ mod tests {
         let context = json!({"condition": true});
         let context_bytes = serde_json::to_vec(&context).unwrap();
 
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             render_template(
                 name.as_ptr(),
@@ -347,7 +341,7 @@ mod tests {
         let context = json!({});
         let context_bytes = serde_json::to_vec(&context).unwrap();
 
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             render_template(
                 name.as_ptr(),
@@ -367,7 +361,7 @@ mod tests {
         let name = "test1";
         let invalid_context = b"invalid json";
 
-        let mut output = vec![0u8; 100];
+        let mut output = vec![0u8; 1024];
         let result = unsafe {
             render_template(
                 name.as_ptr(),
@@ -379,6 +373,11 @@ mod tests {
             )
         };
 
-        assert_eq!(result, 0);
+        assert_eq!(
+            result, 0,
+            "Expected render to fail and return 0, got {}",
+            result
+        );
+        assert!(output[0] == 0);
     }
 }
