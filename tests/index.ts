@@ -17,15 +17,13 @@ export type CompileResult =
 export class Minijinja {
   private wasm: WebAssembly.Instance
   private memory: WebAssembly.Memory
-  private heapOffset = 0
+  private heapOffset = 1024
 
   constructor(wasmModule: WebAssembly.Module) {
-    this.memory = new WebAssembly.Memory({ initial: 10 })
     this.wasm = new WebAssembly.Instance(wasmModule, {
-      env: {
-        memory: this.memory,
-      },
-    })
+      env: {}, // no need to pass memory
+    }) as any
+    this.memory = this.wasm.exports.memory as WebAssembly.Memory
   }
 
   private get memoryBuffer(): Uint8Array {
@@ -73,6 +71,12 @@ export class Minijinja {
     )
 
     const result = this.readString(outPtr, resultSize)
+
+    console.log("Result string:", result)
+    console.log("Memory view:", [
+      ...this.memoryBuffer.slice(outPtr, outPtr + resultSize),
+    ])
+
     return JSON.parse(result)
   }
 
