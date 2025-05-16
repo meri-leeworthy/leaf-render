@@ -14,6 +14,15 @@ export type CompileResult =
   | { type: "Success" }
   | { type: "Error"; error: CompileError }
 
+export interface RenderError {
+  error_type: string
+  message: string
+}
+
+export type RenderResult =
+  | { type: "Success"; result: string }
+  | { type: "Error"; error: RenderError }
+
 export class LeafRenderer {
   private wasm: WebAssembly.Instance
   private memory: WebAssembly.Memory
@@ -80,7 +89,7 @@ export class LeafRenderer {
     return JSON.parse(result)
   }
 
-  renderTemplate(name: string, context: any): string {
+  renderTemplate(name: string, context: any): RenderResult {
     const [namePtr, nameLen] = this.writeStringToMemory(name)
     const contextStr = JSON.stringify(context)
     const [ctxPtr, ctxLen] = this.writeStringToMemory(contextStr)
@@ -95,6 +104,7 @@ export class LeafRenderer {
       4096
     )
 
-    return this.readString(outPtr, resultSize)
+    const result = this.readString(outPtr, resultSize)
+    return JSON.parse(result)
   }
 }
