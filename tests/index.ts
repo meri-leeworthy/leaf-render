@@ -14,7 +14,7 @@ export type CompileResult =
   | { type: "Success" }
   | { type: "Error"; error: CompileError }
 
-export class Minijinja {
+export class LeafRenderer {
   private wasm: WebAssembly.Instance
   private memory: WebAssembly.Memory
   private heapOffset = 1024

@@ -1,7 +1,7 @@
 {
-  "name": "@leaf/minijinja",
+  "name": "leaf-render",
   "version": "0.1.0",
-  "description": "WASM bindings for minijinja template engine",
+  "description": "WASM bindings for Minijinja template engine using Leaf entity representations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

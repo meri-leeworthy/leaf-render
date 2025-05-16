@@ -1,10 +1,10 @@
-import { Minijinja, TemplateSource } from "./index"
+import { LeafRenderer, TemplateSource } from "./index"
 import * as fs from "fs"
 import * as path from "path"
 import { describe, expect, it, beforeAll, beforeEach } from "@jest/globals"
 
 describe("Minijinja", () => {
-  let minijinja: Minijinja
+  let minijinja: LeafRenderer
   let wasmModule: WebAssembly.Module
 
   beforeAll(async () => {
@@ -15,7 +15,7 @@ describe("Minijinja", () => {
     )
     const wasmBuffer = fs.readFileSync(wasmPath)
     wasmModule = await WebAssembly.compile(wasmBuffer)
-    minijinja = new Minijinja(wasmModule)
+    minijinja = new LeafRenderer(wasmModule)
   })
 
   describe("compileTemplates", () => {
