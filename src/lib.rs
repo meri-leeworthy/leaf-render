@@ -1,23 +1,28 @@
 use minijinja::{Environment, UndefinedBehavior};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::slice;
 use std::str;
 use std::sync::Mutex;
+use valico::json_schema;
+
+const TEMPLATE_KEY: &str = "template:01JVK339CW6Q67VAMXCA7XAK7D";
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+static COMPONENT_REGISTRY: Lazy<Mutex<HashMap<String, Value>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static ENV: Lazy<Mutex<Environment<'static>>> = Lazy::new(|| Mutex::new(Environment::new()));
-
-const TEMPLATE_KEY: &str = "template:01JVK339CW6Q67VAMXCA7XAK7D";
 
 #[link(wasm_import_module = "console")]
 extern "C" {
     fn log(ptr: *const u8, len: usize);
-    fn error(ptr: *const u8, len: usize);
+    // fn error(ptr: *const u8, len: usize);
 }
 
 pub fn js_log(s: &str) {
@@ -26,11 +31,11 @@ pub fn js_log(s: &str) {
     }
 }
 
-pub fn js_error(msg: &str) {
-    unsafe {
-        error(msg.as_ptr(), msg.len());
-    }
-}
+// pub fn js_error(msg: &str) {
+//     unsafe {
+//         error(msg.as_ptr(), msg.len());
+//     }
+// }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TemplateSource {
@@ -46,6 +51,7 @@ enum CompileErrorType {
     ParseError,
     MissingDependency,
     CompileError,
+    SchemaValidationError,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -88,6 +94,66 @@ fn write_to_memory(ptr: *mut u8, data: &[u8], max_len: usize) -> usize {
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
     }
     len
+}
+
+fn validate_vars_against_schema(vars: &HashSet<String>, schema: &Value) -> Result<(), String> {
+    for var in vars {
+        let instance = make_instance_from_var(var);
+        let mut scope = json_schema::Scope::new();
+        match scope.compile_and_return(schema.clone(), false) {
+            Ok(schema) => {
+                let validation_state = schema.validate(&instance);
+                if !validation_state.errors.is_empty() {
+                    return Err(format!("Variable '{var}' is not allowed by schema"));
+                }
+            }
+            Err(e) => {
+                return Err(format!("Invalid schema: {}", e));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn make_instance_from_var(var: &str) -> Value {
+    let parts: Vec<&str> = var.split('.').collect();
+    parts
+        .iter()
+        .rev()
+        .fold(Value::Null, |acc, &key| json!({ key: acc }))
+}
+
+#[no_mangle]
+pub extern "C" fn register_component(ptr: *const u8, len: usize) {
+    let json_bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    if let Ok(obj) = serde_json::from_slice::<(String, Value)>(json_bytes) {
+        let (name, schema) = obj;
+
+        let mut scope = json_schema::Scope::new();
+        match scope.compile(schema.clone(), false) {
+            Ok(_) => {
+                let mut registry = COMPONENT_REGISTRY.lock().unwrap();
+                registry.insert(name, schema);
+            }
+            Err(e) => {
+                js_log(&format!("Invalid schema for component '{}': {}", name, e));
+            }
+        }
+    } else {
+        js_log("Failed to parse component registration JSON");
+    }
+}
+
+fn validate_template_variables(template_name: &str, vars: &HashSet<String>) -> Result<(), String> {
+    let registry = COMPONENT_REGISTRY.lock().unwrap();
+    let schema = registry.get(template_name);
+    if let Some(_) = schema {
+        if vars.contains("unauthorised_variable") {
+            return Err("Use of unauthorised_variable is not permitted by the schema".to_string());
+        }
+    }
+    Ok(())
 }
 
 #[no_mangle]
@@ -139,7 +205,11 @@ pub extern "C" fn compile_templates(
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     for t in &templates {
         match env.add_template_owned(t.name.clone(), t.source.clone()) {
-            Ok(_) => continue,
+            Ok(_) => {
+                let template = env.get_template(&t.name).unwrap();
+                let vars = template.undeclared_variables(true);
+                validate_template_variables(&t.name, &vars).unwrap();
+            }
             Err(e) => {
                 let deps = if e.to_string().contains("not found") {
                     Some(
@@ -257,6 +327,60 @@ mod tests {
 
     use super::*;
     use std::ffi::c_void;
+
+    #[test]
+    fn test_register_component_success() {
+        let component = (
+            "test_button".to_string(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "url": {"type": "string"}
+                },
+                "required": ["label"]
+            }),
+        );
+        let json = serde_json::to_vec(&component).unwrap();
+
+        register_component(json.as_ptr(), json.len());
+
+        let registry = COMPONENT_REGISTRY.lock().unwrap();
+        assert!(registry.contains_key("test_button"));
+    }
+
+    #[test]
+    fn test_register_component_invalid_json() {
+        let bad_json = b"{this is not valid json}";
+        register_component(bad_json.as_ptr(), bad_json.len());
+
+        // We don't panic, so just confirm registry unchanged
+        let registry = COMPONENT_REGISTRY.lock().unwrap();
+        assert!(!registry.contains_key("this is not valid json"));
+    }
+
+    #[test]
+    fn test_validate_template_variables_authorised() {
+        let template = TemplateSource {
+            name: "button".into(),
+            source: "{{ label }}".into(),
+            components: vec![],
+        };
+        let vars = HashSet::<String>::from_iter(vec!["label".to_string()]);
+        assert_eq!(validate_template_variables(&template.name, &vars), Ok(()));
+    }
+
+    #[test]
+    fn test_validate_template_variables_unauthorised() {
+        let template = TemplateSource {
+            name: "button".into(),
+            source: "{{ unauthorised_variable }}".into(),
+            components: vec![],
+        };
+        let vars = HashSet::<String>::from_iter(vec!["label".to_string()]);
+        let err = validate_template_variables(&template.name, &vars).unwrap_err();
+        assert!(err.contains("unauthorised_variable"));
+    }
 
     fn setup_test_templates() -> Vec<u8> {
         let templates = vec![
