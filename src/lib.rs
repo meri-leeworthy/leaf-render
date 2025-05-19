@@ -1,6 +1,7 @@
 use minijinja::{Environment, UndefinedBehavior};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use serde_json::Value;
 use std::slice;
 use std::str;
@@ -11,12 +12,34 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 static ENV: Lazy<Mutex<Environment<'static>>> = Lazy::new(|| Mutex::new(Environment::new()));
 
-#[derive(Serialize, Deserialize, Clone)]
+const TEMPLATE_KEY: &str = "template:01JVK339CW6Q67VAMXCA7XAK7D";
+
+#[link(wasm_import_module = "console")]
+extern "C" {
+    fn log(ptr: *const u8, len: usize);
+    fn error(ptr: *const u8, len: usize);
+}
+
+pub fn js_log(s: &str) {
+    unsafe {
+        log(s.as_ptr(), s.len());
+    }
+}
+
+pub fn js_error(msg: &str) {
+    unsafe {
+        error(msg.as_ptr(), msg.len());
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct TemplateSource {
     name: String,
     source: String,
-    components: Option<Vec<String>>,
+    components: Vec<String>,
 }
+
+type Entity = Map<String, Value>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 enum CompileErrorType {
@@ -75,7 +98,7 @@ pub extern "C" fn compile_templates(
     out_len: usize,
 ) -> usize {
     let json_bytes = unsafe { slice::from_raw_parts(ptr, len) };
-    let templates: Vec<TemplateSource> = match serde_json::from_slice(json_bytes) {
+    let entities: Vec<Entity> = match serde_json::from_slice(json_bytes) {
         Ok(t) => t,
         Err(e) => {
             let error = CompileError {
@@ -88,6 +111,29 @@ pub extern "C" fn compile_templates(
             return write_to_memory(out_ptr, result_json.as_bytes(), out_len);
         }
     };
+
+    let templates: Vec<TemplateSource> = entities
+        .iter()
+        .filter_map(|e| {
+            js_log(&format!("template entity: {:#?}", e));
+            let template = e.get(TEMPLATE_KEY).and_then(|v| v.as_object())?;
+            let name = template.get("name").and_then(|v| v.as_str())?;
+            let source = template.get("source").and_then(|v| v.as_str())?;
+            let components = template.get("components").and_then(|v| v.as_array())?;
+            let components = components
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect();
+            Some(TemplateSource {
+                name: name.to_string(),
+                source: source.to_string(),
+                components,
+            })
+        })
+        .collect();
+
+    js_log(&format!("templates: {:#?}", templates));
 
     let mut env = ENV.lock().unwrap();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -217,12 +263,12 @@ mod tests {
             TemplateSource {
                 name: "test1".to_string(),
                 source: "Hello {{ name }}!".to_string(),
-                components: None,
+                components: vec![],
             },
             TemplateSource {
                 name: "test2".to_string(),
                 source: "{% if condition %}True{% else %}False{% endif %}".to_string(),
-                components: None,
+                components: vec![],
             },
         ];
         serde_json::to_vec(&templates).unwrap()
@@ -232,7 +278,7 @@ mod tests {
         let templates = vec![TemplateSource {
             name: "parent".to_string(),
             source: "{% include 'child' %}".to_string(),
-            components: None,
+            components: vec![],
         }];
         serde_json::to_vec(&templates).unwrap()
     }

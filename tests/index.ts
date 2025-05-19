@@ -1,7 +1,21 @@
+// import { ComponentId } from "@muni-town/leaf"
+
+// export const templateComponentDef = defComponent(
+//   "template:01JVK339CW6Q67VAMXCA7XAK7D",
+//   LoroMap<TemplateSource>
+// )
+
+type ComponentId = string
+
+export type Entity<T> = {
+  [key: ComponentId]: T
+}
+
 export interface TemplateSource {
   name: string
   source: string
-  components?: string[]
+  components: ComponentId[]
+  [key: string]: unknown
 }
 
 export interface CompileError {
@@ -29,10 +43,28 @@ export class LeafRenderer {
   private heapOffset = 1024
 
   constructor(wasmModule: WebAssembly.Module) {
+    const decoder = new TextDecoder()
+    let memory: WebAssembly.Memory
+
+    const wasmImports = {
+      console: {
+        error(ptr: number, len: number) {
+          console.error(decoder.decode(new Uint8Array(memory.buffer, ptr, len)))
+        },
+        log(ptr: number, len: number) {
+          console.log(decoder.decode(new Uint8Array(memory.buffer, ptr, len)))
+        },
+      },
+    }
+
+    // Instantiate with imports
     this.wasm = new WebAssembly.Instance(wasmModule, {
-      env: {}, // no need to pass memory
-    }) as any
+      console: wasmImports.console,
+    })
+
+    // Get memory export and update closure
     this.memory = this.wasm.exports.memory as WebAssembly.Memory
+    memory = this.memory
   }
 
   private get memoryBuffer(): Uint8Array {
@@ -67,7 +99,7 @@ export class LeafRenderer {
     return new TextDecoder().decode(view)
   }
 
-  compileTemplates(templates: TemplateSource[]): CompileResult {
+  compileTemplates(templates: Entity<TemplateSource>[]): CompileResult {
     const json = JSON.stringify(templates)
     const [inPtr, inLen] = this.writeStringToMemory(json)
     const outPtr = this.alloc(4096)

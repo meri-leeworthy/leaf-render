@@ -1,4 +1,4 @@
-import { LeafRenderer, TemplateSource } from "./index"
+import { Entity, LeafRenderer, TemplateSource } from "./index"
 import * as fs from "fs"
 import * as path from "path"
 import { describe, expect, it, beforeAll, beforeEach } from "@jest/globals"
@@ -20,14 +20,20 @@ describe("LeafRenderer", () => {
 
   describe("compileTemplates", () => {
     it("should successfully compile valid templates", () => {
-      const templates: TemplateSource[] = [
+      const templates: Entity<TemplateSource>[] = [
         {
-          name: "test1",
-          source: "Hello {{ name }}!",
+          "template:01JVK339CW6Q67VAMXCA7XAK7D": {
+            name: "test1",
+            source: "Hello {{ name }}!",
+            components: [],
+          },
         },
         {
-          name: "test2",
-          source: "{% if condition %}True{% else %}False{% endif %}",
+          "template:01JVK339CW6Q67VAMXCA7XAK7D": {
+            name: "test2",
+            source: "{% if condition %}True{% else %}False{% endif %}",
+            components: [],
+          },
         },
       ]
 
@@ -36,10 +42,13 @@ describe("LeafRenderer", () => {
     })
 
     it("should handle invalid templates", () => {
-      const templates: TemplateSource[] = [
+      const templates: Entity<TemplateSource>[] = [
         {
-          name: "invalid",
-          source: "{{ invalid syntax }}",
+          "template:01JVK339CW6Q67VAMXCA7XAK7D": {
+            name: "invalid",
+            source: "{{ invalid syntax }}",
+            components: [],
+          },
         },
       ]
 
@@ -72,14 +81,20 @@ describe("LeafRenderer", () => {
   describe("renderTemplate", () => {
     beforeEach(() => {
       // Compile test templates before each test
-      const templates: TemplateSource[] = [
+      const templates: Entity<TemplateSource>[] = [
         {
-          name: "test1",
-          source: "Hello {{ name }}!",
+          "template:01JVK339CW6Q67VAMXCA7XAK7D": {
+            name: "test1",
+            source: "Hello {{ name }}!",
+            components: [],
+          },
         },
         {
-          name: "test2",
-          source: "{% if condition %}True{% else %}False{% endif %}",
+          "template:01JVK339CW6Q67VAMXCA7XAK7D": {
+            name: "test2",
+            source: "{% if condition %}True{% else %}False{% endif %}",
+            components: [],
+          },
         },
       ]
       renderer.compileTemplates(templates)
