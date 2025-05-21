@@ -20,19 +20,39 @@ describe("LeafRenderer", () => {
 
   describe("compileTemplates", () => {
     it("should successfully compile valid templates", () => {
+      renderer.registerComponent([
+        "name_component",
+        {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+          required: ["name"],
+        },
+      ])
+      renderer.registerComponent([
+        "condition_component",
+        {
+          type: "object",
+          properties: {
+            condition: { type: "boolean" },
+          },
+          required: ["condition"],
+        },
+      ])
       const templates: Entity<TemplateSource>[] = [
         {
           "template:01JVK339CW6Q67VAMXCA7XAK7D": {
             name: "test1",
             source: "Hello {{ name }}!",
-            components: [],
+            components: ["name_component"],
           },
         },
         {
           "template:01JVK339CW6Q67VAMXCA7XAK7D": {
             name: "test2",
             source: "{% if condition %}True{% else %}False{% endif %}",
-            components: [],
+            components: ["condition_component"],
           },
         },
       ]
@@ -80,20 +100,41 @@ describe("LeafRenderer", () => {
 
   describe("renderTemplate", () => {
     beforeEach(() => {
+      renderer.registerComponent([
+        "name_component",
+        {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+          required: ["name"],
+        },
+      ])
+      renderer.registerComponent([
+        "condition_component",
+        {
+          type: "object",
+          properties: {
+            condition: { type: "boolean" },
+          },
+          required: ["condition"],
+        },
+      ])
+
       // Compile test templates before each test
       const templates: Entity<TemplateSource>[] = [
         {
           "template:01JVK339CW6Q67VAMXCA7XAK7D": {
             name: "test1",
             source: "Hello {{ name }}!",
-            components: [],
+            components: ["name_component"],
           },
         },
         {
           "template:01JVK339CW6Q67VAMXCA7XAK7D": {
             name: "test2",
             source: "{% if condition %}True{% else %}False{% endif %}",
-            components: [],
+            components: ["condition_component"],
           },
         },
       ]

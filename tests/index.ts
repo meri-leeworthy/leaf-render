@@ -1,15 +1,37 @@
-// import { ComponentId } from "@muni-town/leaf"
-
-// export const templateComponentDef = defComponent(
-//   "template:01JVK339CW6Q67VAMXCA7XAK7D",
-//   LoroMap<TemplateSource>
-// )
+import { wasmBindgenImports } from "./wbindgen"
 
 type ComponentId = string
 
 export type Entity<T> = {
   [key: ComponentId]: T
 }
+
+export type JSONSchemaObject = {
+  type: "object"
+  properties: Record<string, JSONSchema>
+  required?: string[]
+}
+
+export type JSONSchemaArray = {
+  type: "array"
+  items: JSONSchema
+}
+
+export type JSONSchemaString = {
+  type: "string"
+}
+
+export type JSONSchemaBoolean = {
+  type: "boolean"
+}
+
+export type JSONSchema =
+  | JSONSchemaObject
+  | JSONSchemaArray
+  | JSONSchemaString
+  | JSONSchemaBoolean
+
+export type ComponentSchema = [ComponentId, JSONSchemaObject]
 
 export interface TemplateSource {
   name: string
@@ -55,12 +77,11 @@ export class LeafRenderer {
           console.log(decoder.decode(new Uint8Array(memory.buffer, ptr, len)))
         },
       },
+      ...wasmBindgenImports,
     }
 
     // Instantiate with imports
-    this.wasm = new WebAssembly.Instance(wasmModule, {
-      console: wasmImports.console,
-    })
+    this.wasm = new WebAssembly.Instance(wasmModule, wasmImports)
 
     // Get memory export and update closure
     this.memory = this.wasm.exports.memory as WebAssembly.Memory
@@ -97,6 +118,26 @@ export class LeafRenderer {
   private readString(ptr: number, length: number): string {
     const view = this.memoryBuffer.slice(ptr, ptr + length)
     return new TextDecoder().decode(view)
+  }
+
+  registerComponent(componentSchema: ComponentSchema): void {
+    const json = JSON.stringify(componentSchema)
+    const [inPtr, inLen] = this.writeStringToMemory(json)
+    const outPtr = this.alloc(4096)
+
+    const resultSize = (this.wasm.exports.register_component as Function)(
+      inPtr,
+      inLen,
+      outPtr,
+      4096
+    )
+
+    const result = this.readString(outPtr, resultSize)
+    const parsed = JSON.parse(result)
+
+    if (parsed.type === "Error") {
+      throw new Error(parsed.message)
+    }
   }
 
   compileTemplates(templates: Entity<TemplateSource>[]): CompileResult {

@@ -48,3 +48,26 @@ export type RenderResult =
   | { type: "Success"; result: string }
   | { type: "Error"; error: RenderError }
 ```
+
+## Registering Components
+
+Components are registered with the `register_component` function.
+
+```ts
+register_component(json.as_ptr(), json.len());
+```
+
+The JSON is a tuple of `(component_id, component_json)` where the JSON is JSON Schema describing the component, and the `component_id` is a Leaf `ComponentId`. Eg:
+
+```json
+["button", {
+  "type": "object",
+  "properties": {
+    "label": {"type": "string"},
+    "url": {"type": "string"}
+  },
+  "required": ["label"]
+}]
+```
+
+The current approach is to assume that all component schemas contain a top-level Object. The valid namespace for the context is then the union of the properties of all the component Objects listed for that template. The alternative would be for users to write out the full component ID in the template, or to add in some aliasing feature.
